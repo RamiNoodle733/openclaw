@@ -96,7 +96,7 @@ function defaultIndexHTML() {
 (() => {
   const logEl = document.getElementById("log");
   const statusEl = document.getElementById("status");
-  const log = (msg) => { logEl.textContent = String(msg); };
+  const log = (msg) => { if (logEl) logEl.textContent = String(msg); };
 
   const hasIOS = () =>
     !!(
@@ -110,11 +110,13 @@ function defaultIndexHTML() {
         typeof window.openclawCanvasA2UIAction.postMessage === "function")
     );
   const hasHelper = () => typeof window.openclawSendUserAction === "function";
-  statusEl.innerHTML =
-    "Bridge: " +
-    (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
-    " · iOS=" + (hasIOS() ? "yes" : "no") +
-    " · Android=" + (hasAndroid() ? "yes" : "no");
+  if (statusEl) {
+    statusEl.innerHTML =
+      "Bridge: " +
+      (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
+      " · iOS=" + (hasIOS() ? "yes" : "no") +
+      " · Android=" + (hasAndroid() ? "yes" : "no");
+  }
 
   const onStatus = (ev) => {
     const d = ev && ev.detail || {};
@@ -140,10 +142,15 @@ function defaultIndexHTML() {
     log(ok ? ("Sent action: " + name) : ("Failed to send action: " + name));
   }
 
-  document.getElementById("btn-hello").onclick = () => send("hello", "demo.hello");
-  document.getElementById("btn-time").onclick = () => send("time", "demo.time");
-  document.getElementById("btn-photo").onclick = () => send("photo", "demo.photo");
-  document.getElementById("btn-dalek").onclick = () => send("dalek", "demo.dalek");
+  const helloBtn = document.getElementById("btn-hello");
+  const timeBtn = document.getElementById("btn-time");
+  const photoBtn = document.getElementById("btn-photo");
+  const dalekBtn = document.getElementById("btn-dalek");
+
+  if (helloBtn) helloBtn.onclick = () => send("hello", "demo.hello");
+  if (timeBtn) timeBtn.onclick = () => send("time", "demo.time");
+  if (photoBtn) photoBtn.onclick = () => send("photo", "demo.photo");
+  if (dalekBtn) dalekBtn.onclick = () => send("dalek", "demo.dalek");
 })();
 </script>
 `;
