@@ -17,6 +17,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         let target: CommandResolver.SSHParsedTarget
         let identity: String
         let remotePort: Int
+        let sandboxPort: Int?
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
         let preferredLocalPort: UInt16?
 
@@ -24,12 +25,14 @@ final class RemotePortTunnel: @unchecked Sendable {
             target: CommandResolver.SSHParsedTarget,
             identity: String,
             remotePort: Int,
+            sandboxPort: Int? = nil,
             hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
             preferredLocalPort: UInt16? = nil)
         {
             self.target = target
             self.identity = identity
             self.remotePort = remotePort
+            self.sandboxPort = sandboxPort
             self.hostKeyPolicy = hostKeyPolicy
             self.preferredLocalPort = preferredLocalPort
         }
@@ -108,6 +111,24 @@ final class RemotePortTunnel: @unchecked Sendable {
             self.resolveRemotePortOverride(defaultRemotePort: legacyPort, for: sshHost, root: root) ?? legacyPort)
     }
 
+    static func sandboxPort(root: [String: Any], remoteGatewayPort: Int) -> Int? {
+        let apps = (root["mcp"] as? [String: Any])?["apps"] as? [String: Any]
+        if apps?["enabled"] as? Bool == false {
+            return nil
+        }
+        if let origin = apps?["sandboxOrigin"] as? String,
+           !origin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return nil
+        }
+
+        let port = (apps?["sandboxPort"] as? Int) ?? remoteGatewayPort + 1
+        guard (1...65535).contains(port), port != remoteGatewayPort else {
+            return nil
+        }
+        return port
+    }
+
     static func configuration() throws -> Configuration {
         let root = OpenClawConfigFile.loadDict()
         let settings = CommandResolver.connectionSettings(configRoot: root)
@@ -126,6 +147,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
             remotePort: ports.remote,
+            sandboxPort: Self.sandboxPort(root: root, remoteGatewayPort: ports.remote),
             hostKeyPolicy: settings.sshHostKeyPolicy,
             preferredLocalPort: UInt16(ports.local))
     }
@@ -145,10 +167,12 @@ final class RemotePortTunnel: @unchecked Sendable {
         let sshHost = configuration.target.host
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
-                "remotePort=\(configuration.remotePort, privacy: .public)")
+                "remotePort=\(configuration.remotePort, privacy: .public) " +
+                "sandboxPort=\(configuration.sandboxPort.map(String.init) ?? "disabled", privacy: .public)")
         let options = Self.sshOptions(
             localPort: localPort,
             remotePort: configuration.remotePort,
+            sandboxPort: configuration.sandboxPort,
             hostKeyPolicy: configuration.hostKeyPolicy)
         let args = CommandResolver.sshArguments(
             target: configuration.target,
@@ -243,6 +267,7 @@ final class RemotePortTunnel: @unchecked Sendable {
                 process: process,
                 processIdentifier: processIdentifier,
                 localPort: localPort,
+                sandboxPort: configuration.sandboxPort,
                 stderrReader: stderrReader,
                 stderrCapture: stderrCapture)
         } catch {
@@ -264,6 +289,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         process: ManagedProcess,
         processIdentifier: pid_t,
         localPort: UInt16,
+        sandboxPort: Int?,
         stderrReader: PipeReadStream,
         stderrCapture: PipeTextCapture) async throws
     {
@@ -277,7 +303,14 @@ final class RemotePortTunnel: @unchecked Sendable {
                 let msg = stderr.isEmpty ? "ssh tunnel exited before listening" : "ssh tunnel failed: \(stderr)"
                 throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
             }
-            if await PortGuardian.shared.isListening(port: Int(localPort), pid: processIdentifier) {
+            let gatewayListening = await PortGuardian.shared.isListening(
+                port: Int(localPort), pid: processIdentifier)
+            let sandboxListening = if let sandboxPort {
+                await PortGuardian.shared.isListening(port: sandboxPort, pid: processIdentifier)
+            } else {
+                true
+            }
+            if gatewayListening && sandboxListening {
                 return
             }
             do {
@@ -288,7 +321,10 @@ final class RemotePortTunnel: @unchecked Sendable {
         } while Date() < deadline
 
         let stderr = stderrCapture.snapshot()
-        let msg = stderr.isEmpty ? "ssh tunnel did not open local port \(localPort)" : "ssh tunnel failed: \(stderr)"
+        let expectedPorts = [Int(localPort)] + (sandboxPort.map { [$0] } ?? [])
+        let msg = stderr.isEmpty
+            ? "ssh tunnel did not open local ports \(expectedPorts)"
+            : "ssh tunnel failed: \(stderr)"
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 
@@ -334,9 +370,10 @@ final class RemotePortTunnel: @unchecked Sendable {
     private static func sshOptions(
         localPort: UInt16,
         remotePort: Int,
+        sandboxPort: Int?,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        [
+        var options = [
             "-o", "BatchMode=yes",
             // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
             "-o", "ControlMaster=no",
@@ -350,7 +387,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
-        ] + hostKeyPolicy.hostKeyOptions
+        ]
+        if let sandboxPort {
+            options += ["-L", "\(sandboxPort):127.0.0.1:\(sandboxPort)"]
+        }
+        return options + hostKeyPolicy.hostKeyOptions
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
@@ -463,12 +504,21 @@ final class RemotePortTunnel: @unchecked Sendable {
         self.portIsFree(port)
     }
 
+    static func _testSandboxPort(root: [String: Any], remoteGatewayPort: Int) -> Int? {
+        self.sandboxPort(root: root, remoteGatewayPort: remoteGatewayPort)
+    }
+
     static func _testSSHOptions(
         localPort: UInt16,
         remotePort: Int,
+        sandboxPort: Int? = nil,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
     {
-        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
+        self.sshOptions(
+            localPort: localPort,
+            remotePort: remotePort,
+            sandboxPort: sandboxPort,
+            hostKeyPolicy: hostKeyPolicy)
     }
 
     #endif
