@@ -18,6 +18,30 @@ struct RemotePortTunnelTests {
         #expect(options.contains("UpdateHostKeys=yes"))
     }
 
+    @Test func `tunnel forwards the sandbox listener alongside the gateway`() {
+        let options = RemotePortTunnel._testSSHOptions(
+            localPort: 18789,
+            remotePort: 18789,
+            sandboxPort: 18790)
+
+        #expect(options.filter { $0 == "-L" }.count == 2)
+        #expect(options.contains("18789:127.0.0.1:18789"))
+        #expect(options.contains("18790:127.0.0.1:18790"))
+    }
+
+    @Test func `sandbox forwarding follows gateway and MCP Apps configuration`() {
+        #expect(RemotePortTunnel._testSandboxPort(root: [:], remoteGatewayPort: 18789) == 18790)
+        #expect(RemotePortTunnel._testSandboxPort(
+            root: ["mcp": ["apps": ["sandboxPort": 19090]]],
+            remoteGatewayPort: 18789) == 19090)
+        #expect(RemotePortTunnel._testSandboxPort(
+            root: ["mcp": ["apps": ["enabled": false]]],
+            remoteGatewayPort: 18789) == nil)
+        #expect(RemotePortTunnel._testSandboxPort(
+            root: ["mcp": ["apps": ["sandboxOrigin": "https://widgets.example.com"]]],
+            remoteGatewayPort: 18789) == nil)
+    }
+
     @Test func `tunnel requires explicit opt in to use SSH config host key policy`() {
         let options = RemotePortTunnel._testSSHOptions(
             localPort: 28789,
