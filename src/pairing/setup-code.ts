@@ -81,11 +81,13 @@ export function resolveConfiguredPairingPublicUrl(config: OpenClawConfig): strin
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+type PairingSetupAuthLabel = "token" | "password" | "trusted-proxy";
+
 type PairingSetupResolution =
   | {
       ok: true;
       payload: PairingSetupPayload;
-      authLabel: "token" | "password";
+      authLabel: PairingSetupAuthLabel;
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
@@ -197,7 +199,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
 }
 
 type ResolveAuthLabelResult = {
-  label?: "token" | "password";
+  label?: PairingSetupAuthLabel;
   error?: string;
 };
 
@@ -322,6 +324,9 @@ function resolvePairingSetupAuthLabel(
   }
   if (password) {
     return { label: "password" };
+  }
+  if (mode === "trusted-proxy" && cfg.gateway?.auth?.trustedProxy) {
+    return { label: "trusted-proxy" };
   }
   if (mode === "none" || mode === "trusted-proxy") {
     return {
