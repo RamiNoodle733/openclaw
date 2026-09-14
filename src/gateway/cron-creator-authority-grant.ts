@@ -213,7 +213,14 @@ export async function withCronManagementGrant<T>(
   assertActive();
   // Queue acknowledgement precedes reservation. Its retained guard still
   // belongs to this exact live run, signal, and expiry after the RPC returns.
-  return await activeManagement.run({ identity, assertActive }, run);
+  const result = await activeManagement.run({ identity, assertActive }, run);
+  // Run history is a read that can spend meaningful time loading/filtering rows.
+  // Recheck its retained management authority immediately before the RPC completes
+  // so an expired or revoked grant cannot release history after processing finishes.
+  if (method === "cron.runs") {
+    assertActive();
+  }
+  return result;
 }
 
 export function getCronManagementAuthority(
