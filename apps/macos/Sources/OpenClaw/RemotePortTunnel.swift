@@ -334,7 +334,8 @@ final class RemotePortTunnel: @unchecked Sendable {
     private static func sshOptions(
         localPort: UInt16,
         remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+        sandboxPortIsFree: ((UInt16) -> Bool)? = nil) -> [String]
     {
         var options = [
             "-o", "BatchMode=yes",
@@ -352,8 +353,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
         ]
         if remotePort < 65535 {
-            let sandboxPort = remotePort + 1
-            options += ["-L", "\(sandboxPort):127.0.0.1:\(sandboxPort)"]
+            let sandboxPort = UInt16(remotePort + 1)
+            let isFree = sandboxPortIsFree?(sandboxPort) ?? self.portIsFree(sandboxPort)
+            if sandboxPort != localPort, isFree {
+                options += ["-L", "\(sandboxPort):127.0.0.1:\(sandboxPort)"]
+            }
         }
         return options + hostKeyPolicy.hostKeyOptions
     }
@@ -471,9 +475,14 @@ final class RemotePortTunnel: @unchecked Sendable {
     static func _testSSHOptions(
         localPort: UInt16,
         remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict,
+        sandboxPortIsFree: ((UInt16) -> Bool)? = nil) -> [String]
     {
-        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
+        self.sshOptions(
+            localPort: localPort,
+            remotePort: remotePort,
+            hostKeyPolicy: hostKeyPolicy,
+            sandboxPortIsFree: sandboxPortIsFree)
     }
 
     #endif
